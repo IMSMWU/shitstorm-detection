@@ -1,0 +1,85 @@
+---
+title: "Shitstorm Detection"
+author: "Christian Hotz-Behofsits"
+date: "4/9/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Building a basic Shitstorm Detection System
+
+In this tutorial you will learn how to build a basic "shitstorm" detection system for your facebook page. A shitstorm is also known as social media crisis or "getting flak on social media". Although, the term is just used in the german speaking countries, I'll use it in this tutorial because it is more expressive than the alternatives.
+
+Our detection will use a facebook (in this case the official facebook account of our student representation - ÖH WU). They received a lot of flak, because they overbooked their prom event and a lot of people with valid tickets were not allowed to enter.
+
+First of all make sure, that all the dependencies are installed and loaded:
+```{r}
+install.packages(c("Rfacebook", "dplyr", "syuzhet","ggplot2", "outliers"))
+library(Rfacebook)
+library(ggplot2)
+library(dplyr)
+```
+
+Furthermore you need a API token, which you can get right here (https://developers.facebook.com/tools/explorer).
+```{r}
+token <- 'EAACEdEose0cBAKCdZCTIE6k3UZBv3TYvIvTwLIcbjy56YY9hd3GZBZAc8GmSZAukFZBfZAZBQBGKL8NikWRGXzpfQ0WSWmhnp4Tsso7EDYlJou0tmXe3NkXBUD6I5O4e8AN609gpjZC0MPRfiVxhHhORaujTZAT0x2vAfkgANGFgiZCpEdlBPOf7XkrAILtGZBxasTcZD'
+```
+
+## Loading Comments
+The following function loads all comments from a page given a page name (page), the facebook token, a start date (since) and a end date (until):
+```{r}
+loadComments <- function(page, token, since, until){
+  # empty dataframe
+  all_comments <- data.frame(row.names = c("from_id", "from_name", "message"))
+  
+  # load posts (max. 5000)
+  page <- getPage(page, token, n = 5000, since, until)
+  
+  # load all comments for the given posts
+  for(id in page$id){
+    # extract just comments and ignore the rest
+    post_comments <- getPost(id, token, n = 1000, likes = FALSE, comments = TRUE)$comments
+    all_comments <- rbind(all_comments, post_comments)
+  }
+  
+  return(all_comments)
+}
+```
+
+With the following call we load all comments from oehwu`s posts:
+```{r}
+comments_raw <- loadComments("oehwu", token, '2016/01/01', '2017/04/01')
+```
+
+Now we have the data, but some data is missing (e.g., sentiment, outlier) and we will delete all unused variables. The sentiment is evaluated using the syuzhet package, which is ok for this task. If you want better results you can train your own sentiment analysis algorithmn or use multiple methods and build an ensambled system. I used the dplyr package to transform the comments, but you can also use base R.
+
+```{r}
+comments <- comments_raw %>% transmute(
+  # remove special chars
+  message = iconv(message, sub = "byte"),
+  # convert date string to timestamp
+  datetime = as.POSIXct(created_time, format = "%Y-%m-%dT%H:%M:%S+0000", tz = "GMT"),
+  # predict sentiment
+  sentiment = sapply(message, syuzhet::get_sentiment),
+  # the following weighted sentiment value will be used to measure the impact
+  weighted_sentiment = sentiment * likes_count,
+  # attention, obvious tip: the outliers package provides some methods to find outliers :)
+  outlier = outliers::scores(weighted_sentiment, type="chisq", prob=0.9),
+  likes_count = likes_count
+  # we will drop all comments without "approval" to remove noise
+) %>% filter(likes_count > 0)
+```
+
+
+## Visualize Results
+We will plot the results using the ggplot package. I allows to mark outliers with a different color and change the size of the points regarding its like_count:
+
+```{r pressure, echo=FALSE}
+ggplot(comments, aes(datetime, weighted_sentiment)) + 
+  geom_line(alpha=0.2) +
+  geom_point(aes(color=outlier, size=likes_count)) + 
+  scale_x_datetime(date_labels = "%b %d")
+```
